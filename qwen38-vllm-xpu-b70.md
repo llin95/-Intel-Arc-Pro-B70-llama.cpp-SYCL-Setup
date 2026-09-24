@@ -4,6 +4,32 @@ Date: 2026-09-24
 
 This note records one working single-GPU configuration for serving Qwen3.8-27B on an Intel Arc Pro B70 32 GB card with vLLM XPU. It is meant as a reproducible field note, not a universal tuning guide.
 
+## Performance Snapshot
+
+The current best local vLLM profile is `float16 + GPTQ INT4 + fp8 KV + native MTP4`. On real Copilot/agent-style traffic with long prompts, it has been faster than the earlier `bfloat16` profile and much faster than the local llama.cpp GGUF path.
+
+| Runtime profile | Observed decode throughput | Notes |
+|---|---:|---|
+| vLLM v0.30, `float16`, MTP4, 180K context | `~56-57 tok/s` cumulative; `~83 tok/s` short high-throughput segment | Current preferred local profile. Uses `top_k=20`, `top_p=0.90`, `temperature=0.7`, and default `reasoning_effort=medium`. |
+| vLLM v0.30, `bfloat16`, MTP4 | `~53 tok/s` cumulative; `~63 tok/s` best segment | Stable, but slower than the current `float16` native MTP4 path on this workload. |
+| vLLM v0.30, `bfloat16`, MTP2 | `~47-50 tok/s` | Conservative fallback profile. |
+| llama.cpp b11149, GGUF, q8 KV, MTP4 | `~22-27 tok/s` | Useful comparison point, but not competitive with vLLM for Qwen3.8 GPTQ serving. |
+
+One recent `float16 + MTP4` live metrics snapshot:
+
+```text
+requests completed: 38
+prompt tokens: 3,821,893
+generation tokens: 47,793
+decode throughput: ~57 tok/s
+prefix cache hit rate: ~94%
+MTP acceptance: ~68.6%
+KV usage: ~67%
+preemptions: 0
+```
+
+The public `84.65 tok/s` single-B70 result is plausible for short-context benchmark traffic. For long agent workloads, expect a lower average because prompts commonly reach `80K-120K+` tokens and MTP acceptance varies by request.
+
 ## Hardware And Runtime
 
 | Item | Value |
