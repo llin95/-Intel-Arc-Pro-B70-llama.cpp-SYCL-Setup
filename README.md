@@ -1,5 +1,7 @@
 # Intel Arc Pro B70 + llama.cpp SYCL: Current Working Setup
 
+Related vLLM setup: [Intel Arc Pro B70 + vLLM XPU + Qwen3.8-27B](qwen38-vllm-xpu-b70.md)
+
 Date: 2026-09-03
 
 GPU: Intel Arc Pro B70, Battlemage / Xe2, 32 GB VRAM
