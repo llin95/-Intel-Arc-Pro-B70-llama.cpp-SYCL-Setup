@@ -30,6 +30,46 @@ preemptions: 0
 
 The public `84.65 tok/s` single-B70 result is plausible for short-context benchmark traffic. For long agent workloads, expect a lower average because prompts commonly reach `80K-120K+` tokens and MTP acceptance varies by request.
 
+## Context And KV Budget Details
+
+This setup advertises a long single-request context, but it is not a concurrent 180K-serving profile. The useful mental model is one large active request at a time, with prefix caching helping repeated agent turns.
+
+| Setting or metric | Value | Meaning |
+|---|---:|---|
+| `--max-model-len` | `180000` | Maximum sequence length exposed by the server for one request. This includes prompt plus generated tokens. |
+| vLLM reported XPU KV cache capacity | about `209,763 tokens` | Startup capacity reported by vLLM for this B70 run. |
+| Capacity ratio | about `1.17x` | `209,763 / 180,000`; enough for one full-length request, not enough for two. |
+| `--max-num-seqs` | `1` | Intentional. A second long request waits instead of competing for KV memory. |
+| `--kv-cache-dtype` | `fp8` | Required for this long-context single-card setup; fp16 KV would consume too much VRAM. |
+| `--gpu-memory-utilization` | `0.96` | Aggressive allocation to make 180K practical on one 32 GB B70. |
+| `xpu-smi` VRAM after load | about `30.4 GiB / 32.7 GiB`, `93%` | Normal for vLLM: model weights, graph memory, and reserved KV cache stay allocated even when idle. |
+| Typical live KV usage | `40-70%` in observed agent traffic | Depends on active prompt length; idle returns to `0%` in vLLM's KV metric, while VRAM remains reserved. |
+
+Observed startup line:
+
+```text
+XPU KV cache size: 209,763 tokens, Maximum concurrency for 180,000 tokens per request: 1.17x
+```
+
+Practical interpretation:
+
+```text
+180K max_model_len is a per-request ceiling, not a throughput target.
+For daily agent use, expect many requests around 80K-120K prompt tokens.
+With max_num_seqs=1, concurrent requests serialize by design.
+If num_requests_waiting rises while kv_cache_usage_perc is high, the service is capacity-bound, not broken.
+```
+
+Safer context variants:
+
+| Profile | Suggested values | When to use |
+|---|---|---|
+| Peak benchmark | `MAX_MODEL_LEN=100000 GPU_UTIL=0.88` | Reproduce short-context public throughput numbers with more VRAM headroom. |
+| Balanced long-context | `MAX_MODEL_LEN=161000 GPU_UTIL=0.90` | Closer to published quality recipe, less aggressive than 180K. |
+| Current local long-agent profile | `MAX_MODEL_LEN=180000 GPU_UTIL=0.96` | Best local tradeoff for large Copilot-style prompts on one B70. |
+
+Do not increase `--max-num-seqs` while keeping `MAX_MODEL_LEN=180000`. If concurrent serving matters more than maximum context, lower `MAX_MODEL_LEN` first, then test queueing and preemption counters.
+
 ## Hardware And Runtime
 
 | Item | Value |
