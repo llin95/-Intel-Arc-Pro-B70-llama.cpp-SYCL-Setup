@@ -1,6 +1,7 @@
 # Intel Arc Pro B70 + vLLM XPU + Qwen3.8-27B
 
 Date: 2026-09-24
+Updated: 2026-10-29
 
 This note records one working single-GPU configuration for serving Qwen3.8-27B on an Intel Arc Pro B70 32 GB card with vLLM XPU. It is meant as a reproducible field note, not a universal tuning guide.
 
@@ -10,7 +11,10 @@ The current best local vLLM profile is `float16 + GPTQ INT4 + fp8 KV + native MT
 
 | Runtime profile | Observed decode throughput | Notes |
 |---|---:|---|
-| vLLM v0.30, `float16`, MTP4, 180K context | `~56-57 tok/s` cumulative; `~83 tok/s` short high-throughput segment | Current preferred local profile. Uses `top_k=20`, `top_p=0.90`, `temperature=0.7`, and default `reasoning_effort=medium`. |
+| vLLM v0.32.0 XPU, `float16`, MTP4, 180K context, cold 150K prompt | `37.93 tok/s` decode, `735.06 tok/s` prefill, `207.48 s` E2E | Clean 3-run synthetic average via local tunnel on 2026-10-20. Stable, but not materially faster than the prior float16 vLLM path on this long-prompt test. |
+| vLLM v0.32.0 XPU, graph64, `float16`, MTP4, cold 150K prompt | `37.60 tok/s` decode, `734.78 tok/s` prefill, `207.59 s` E2E | 3-run graph64 A/B; essentially tied with the normal v0.32 profile. |
+| Intel LLM Scaler vLLM 1.5, `float16`, `qwen3_5_mtp`, cold 150K prompt | `38.37 tok/s` decode, `733.71 tok/s` prefill, `207.82 s` E2E | Healthy A/B fallback. Same class as vLLM v0.32.0, not a clear upgrade. |
+| vLLM v0.30, `float16`, MTP4, 180K context | `~56-57 tok/s` cumulative; `~83 tok/s` short high-throughput segment | Prior live workload profile. Uses `top_k=20`, `top_p=0.90`, `temperature=0.7`, and default `reasoning_effort=medium`. |
 | vLLM v0.30, `bfloat16`, MTP4 | `~53 tok/s` cumulative; `~63 tok/s` best segment | Stable, but slower than the current `float16` native MTP4 path on this workload. |
 | vLLM v0.30, `bfloat16`, MTP2 | `~47-50 tok/s` | Conservative fallback profile. |
 | llama.cpp b11149, GGUF, q8 KV, MTP4 | `~22-27 tok/s` | Useful comparison point, but not competitive with vLLM for Qwen3.8 GPTQ serving. |
@@ -83,6 +87,31 @@ Do not increase `--max-num-seqs` while keeping `MAX_MODEL_LEN=180000`. If concur
 | KV cache | `fp8` |
 | Speculative decoding | Native MTP, `num_speculative_tokens=4` |
 | API mode | OpenAI-compatible server |
+
+## vLLM v0.32.0 And Intel LLM Scaler 1.5 Checks
+
+These later checks used the same Qwen3.8 GPTQ INT4 + fp8 KV + MTP-style serving idea, but they are recorded as benchmark results rather than replacing the older launch recipe above.
+
+### vLLM v0.32.0 XPU, 150K Cold Prompt
+
+Test date: 2026-10-20. Endpoint was forwarded to `127.0.0.1:8089`; served model was `qwen38-v032`; each request used a unique approximately 150K-token prompt, `max_tokens=128`, and `temperature=0`.
+
+| Profile | Runs | Prompt tokens | TTFT avg | E2E avg | Prefill avg | Decode avg | MTP acceptance avg | Prefix hit | Preemptions |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| vLLM v0.32.0, normal graph defaults | 3 | `150,029` | `204.11 s` | `207.48 s` | `735.06 tok/s` | `37.93 tok/s` | `67.66%` | `0%` | `0` |
+| vLLM v0.32.0, graph64 A/B | 3 | `150,029` | `204.18 s` | `207.59 s` | `734.78 tok/s` | `37.60 tok/s` | `65.46%` | `0%` | `0` |
+
+Interpretation: v0.32.0 is stable at 150K on this host. Graph64 did not improve this long-prompt cold benchmark. The numbers match the prior local vLLM float16 class rather than moving it into a new performance tier.
+
+### Intel LLM Scaler vLLM 1.5, 150K Cold Prompt
+
+Test date: 2026-10. Image was `intel/llm-scaler-vllm:1.5`, served model `qwen38`, same 150K target prompt and `max_tokens=128`. This image uses LLM Scaler's speculative method name `qwen3_5_mtp`, and GPTQ was auto-detected from the checkpoint config rather than passed with `--quantization`.
+
+| Profile | Runs | Prompt tokens | TTFT | E2E | Prefill | Decode | MTP acceptance | Prefix hit | Preemptions |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Intel LLM Scaler vLLM 1.5 | 1 | `150,029` | `204.48 s` | `207.82 s` | `733.71 tok/s` | `38.37 tok/s` | `60.81%` | `0%` | `0` |
+
+Interpretation: LLM Scaler 1.5 is a healthy B70 fallback/A-B target, but it is not faster than vLLM v0.32.0 in this test. Docker Hub currently has no newer `intel/llm-scaler-vllm:1.6`; `latest` is older than `1.5`, so use the explicit `1.5` tag if testing this path.
 
 ## Current Recommended Profile
 
